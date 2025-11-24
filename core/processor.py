@@ -54,6 +54,25 @@ def _locate_header_and_hours(rows):
     return -1, []
 
 
+def _find_name_col(header_row):
+    """
+    Try to find the column index whose header looks like the line/tie name.
+    We look for keywords like 'name', 'line', or 'tie' in the header text.
+    Returns index or None.
+    """
+    if not header_row:
+        return None
+
+    keywords = ("name", "line", "tie")
+    for idx, cell in enumerate(header_row):
+        if not cell:
+            continue
+        text = str(cell).strip().lower()
+        if any(k in text for k in keywords):
+            return idx
+    return None
+
+
 def process_csv_file(csv_path: str):
     """
     Process a single monthly CSV.
@@ -66,8 +85,9 @@ def process_csv_file(csv_path: str):
       * Header with Hr01..Hr24 can be anywhere (we scan for it).
       * 'Export' / 'Import' can be in ANY column (A or B, etc).
         We detect the first column that contains those values.
-      * Line name is assumed to be two columns to the right of the
-        flow-type column (same pattern as your DEC examples).
+      * Line name column is preferably taken from the header
+        ('Name', 'Line', 'Tie'); if that can't be found we fall
+        back to "flow column + 2" like in the original layout.
     """
     results = defaultdict(lambda: defaultdict(float))
 
@@ -83,10 +103,13 @@ def process_csv_file(csv_path: str):
         # Couldn't find a Hr01..Hr24 header row
         return {}
 
+    header_row = all_rows[header_index]
+    name_col_idx = _find_name_col(header_row)  # may be None
+
     data_rows = all_rows[header_index + 1 :]
 
     current_line_name = ""
-    flow_col_index = None  # we will detect this dynamically
+    flow_col_index = None  # we will detect this dynamically from the data rows
 
     for row in data_rows:
         if not row:
@@ -113,11 +136,16 @@ def process_csv_file(csv_path: str):
             # Ignore Net or anything else
             continue
 
-        # Line name is two columns to the right of the flow-type column
-        line_name_idx = flow_col_index + 2
+        # Determine which column holds the line/tie name
         line_name_cell = ""
-        if len(row) > line_name_idx:
-            line_name_cell = str(row[line_name_idx]).strip()
+        if name_col_idx is not None and name_col_idx < len(row):
+            # Preferred: explicit Name/Line/Tie column from header
+            line_name_cell = str(row[name_col_idx]).strip()
+        else:
+            # Fallback: two columns to the right of flow-type column
+            line_name_idx = flow_col_index + 2
+            if line_name_idx < len(row):
+                line_name_cell = str(row[line_name_idx]).strip()
 
         if line_name_cell:
             current_line_name = line_name_cell
