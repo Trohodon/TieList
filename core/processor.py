@@ -1,4 +1,4 @@
-# processor.py
+# core/processor.py
 
 import os
 import csv
@@ -41,7 +41,6 @@ def choose_csv_files(folder: str, prefer_updates: bool):
     all_csv = list_csv_files(folder)
 
     if not prefer_updates:
-        # Just drop any _update files
         chosen = []
         for path in all_csv:
             name = os.path.basename(path)
@@ -58,10 +57,10 @@ def choose_csv_files(folder: str, prefer_updates: bool):
         root, ext = os.path.splitext(name)
         if root.lower().endswith("_update"):
             base_root = root[:-7]  # strip "_update"
-            base_map[base_root] = path  # overwrite base
+            base_map[base_root] = path  # overwrite base if present
         else:
             base_root = root
-            base_map.setdefault(base_root, path)  # only set if not already replaced
+            base_map.setdefault(base_root, path)  # only set if not replaced
 
     # Return files in a stable order
     chosen_paths = [base_map[k] for k in sorted(base_map.keys())]
@@ -121,12 +120,6 @@ def process_csv_file(csv_path: str):
     Returns:
         results: dict[line_name][flow_type] = total_sum_for_this_file
         where flow_type is 'Export' or 'Import'.
-
-    Flexible enough for:
-      * Header with Hr01..Hr24 anywhere.
-      * 'Export' / 'Import' in ANY column.
-      * Line name from header column ('Name', 'Line', 'Tie') when present,
-        otherwise "flow column + 2".
     """
     results = defaultdict(lambda: defaultdict(float))
 
@@ -226,6 +219,32 @@ def merge_results(list_of_results):
     return yearly
 
 
+def write_yearly_results_csv(yearly_results, folder_label: str, output_folder: str):
+    """
+    Write yearly results for one subfolder to a CSV file.
+
+    Returns: full path to the output file (or None if nothing to write).
+    """
+    if not yearly_results:
+        return None
+
+    os.makedirs(output_folder, exist_ok=True)
+
+    filename = f"{folder_label}_YearlyTotals.csv"
+    out_path = os.path.join(output_folder, filename)
+
+    with open(out_path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Line Name", "Export Total", "Import Total"])
+        for line_name in sorted(yearly_results.keys()):
+            type_dict = yearly_results[line_name]
+            export_total = type_dict.get("Export", 0.0)
+            import_total = type_dict.get("Import", 0.0)
+            writer.writerow([line_name, export_total, import_total])
+
+    return out_path
+
+
 def format_results_as_text(yearly_results, folder_label: str):
     """
     Create a human-readable text block for the GUI log window.
@@ -248,12 +267,17 @@ def format_results_as_text(yearly_results, folder_label: str):
     return "\n".join(lines)
 
 
-def process_single_subfolder(subfolder_path: str, dry_run: bool = True,
-                             prefer_updates: bool = True):
+def process_single_subfolder(
+    subfolder_path: str,
+    dry_run: bool = True,
+    prefer_updates: bool = True,
+    output_folder: str | None = None,
+):
     """
     Process one monthly folder (e.g. SCPSAMonthly).
 
-    Returns a tuple (log_text, yearly_results_dict).
+    Returns a tuple (log_text, yearly_results_dict, output_path).
+    output_path is None if nothing was written (e.g. dry run, or no data).
     """
     folder_name = os.path.basename(subfolder_path.rstrip("/\\"))
     csv_files = choose_csv_files(subfolder_path, prefer_updates=prefer_updates)
@@ -280,22 +304,34 @@ def process_single_subfolder(subfolder_path: str, dry_run: bool = True,
     log_lines.append("")
     log_lines.append(format_results_as_text(yearly, folder_name))
 
+    output_path = None
+    if (not dry_run) and output_folder:
+        output_path = write_yearly_results_csv(
+            yearly, folder_label=folder_name, output_folder=output_folder
+        )
+        if output_path:
+            log_lines.append(f"Saved yearly totals to: {output_path}")
+
     if dry_run:
         log_lines.append("Dry run: no files were written. (Computation only.)")
 
-    return "\n".join(log_lines), yearly
+    return "\n".join(log_lines), yearly, output_path
 
 
-def process_all_subfolders(main_folder: str, dry_run: bool = True,
-                           prefer_updates: bool = True):
+def process_all_subfolders(
+    main_folder: str,
+    dry_run: bool = True,
+    prefer_updates: bool = True,
+    output_folder: str | None = None,
+):
     """
-    Process all immediate subfolders under main_folder.
+    Non-GUI helper: process all subfolders and (optionally) write outputs.
 
-    Returns log_text covering everything.
+    Returns (combined_log_text, list_of_output_paths)
     """
     subfolders = find_subfolders(main_folder)
     if not subfolders:
-        return f"No subfolders found inside: {main_folder}"
+        return f"No subfolders found inside: {main_folder}", []
 
     all_logs = [
         f"Main folder: {main_folder}",
@@ -303,16 +339,23 @@ def process_all_subfolders(main_folder: str, dry_run: bool = True,
         f"Prefer updates: {prefer_updates}",
         "",
     ]
+    all_outputs: list[str] = []
+
     for sub in subfolders:
-        log_text, _ = process_single_subfolder(
-            sub, dry_run=dry_run, prefer_updates=prefer_updates
+        log_text, _, out_path = process_single_subfolder(
+            sub,
+            dry_run=dry_run,
+            prefer_updates=prefer_updates,
+            output_folder=output_folder,
         )
         all_logs.append(log_text)
         all_logs.append("-" * 60)
+        if out_path:
+            all_outputs.append(out_path)
 
     if dry_run:
         all_logs.append("Dry run complete for ALL subfolders. No files written.")
     else:
         all_logs.append("Processing complete for ALL subfolders.")
 
-    return "\n".join(all_logs)
+    return "\n".join(all_logs), all_outputs
