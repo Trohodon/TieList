@@ -61,6 +61,13 @@ def process_csv_file(csv_path: str):
     Returns:
         results: dict[line_name][flow_type] = total_sum_for_this_file
         where flow_type is 'Export' or 'Import'.
+
+    This version is flexible:
+      * Header with Hr01..Hr24 can be anywhere (we scan for it).
+      * 'Export' / 'Import' can be in ANY column (A or B, etc).
+        We detect the first column that contains those values.
+      * Line name is assumed to be two columns to the right of the
+        flow-type column (same pattern as your DEC examples).
     """
     results = defaultdict(lambda: defaultdict(float))
 
@@ -76,40 +83,47 @@ def process_csv_file(csv_path: str):
         # Couldn't find a Hr01..Hr24 header row
         return {}
 
-    # Data starts on the row after the header
     data_rows = all_rows[header_index + 1 :]
 
-    # We assume:
-    # Col 0: Export / Import / Net
-    # Col 1: Date
-    # Col 2: Line name (may be blank except for first row of a block)
     current_line_name = ""
+    flow_col_index = None  # we will detect this dynamically
 
     for row in data_rows:
         if not row:
             continue
 
-        # Make sure row is long enough for at least the first 3 columns
-        # (Python will just give "" if index is out of range via safe checks below.)
-        flow_type = str(row[0]).strip() if len(row) > 0 else ""
+        # If we don't yet know which column has Export/Import, scan this row
+        if flow_col_index is None:
+            for idx, cell in enumerate(row):
+                val = str(cell).strip().lower()
+                if val in SUPPORTED_TYPES:
+                    flow_col_index = idx
+                    break
+
+        if flow_col_index is None or flow_col_index >= len(row):
+            # still haven't seen any Export/Import yet
+            continue
+
+        flow_type = str(row[flow_col_index]).strip()
         if not flow_type:
             continue
 
         flow_type_lower = flow_type.lower()
         if flow_type_lower not in SUPPORTED_TYPES:
-            # Ignore Net or anything else for now
+            # Ignore Net or anything else
             continue
 
-        # Column 2 is line name / corridor description
+        # Line name is two columns to the right of the flow-type column
+        line_name_idx = flow_col_index + 2
         line_name_cell = ""
-        if len(row) > 2:
-            line_name_cell = str(row[2]).strip()
+        if len(row) > line_name_idx:
+            line_name_cell = str(row[line_name_idx]).strip()
 
         if line_name_cell:
             current_line_name = line_name_cell
 
         if not current_line_name:
-            # If we still don't have a name, skip – can't group it
+            # Can't group without a name
             continue
 
         # Sum Hr01..Hr24
@@ -123,7 +137,6 @@ def process_csv_file(csv_path: str):
             try:
                 total_for_row += float(cell)
             except ValueError:
-                # Non-numeric; ignore
                 continue
 
         results[current_line_name][flow_type.capitalize()] += total_for_row
