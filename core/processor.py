@@ -1,4 +1,4 @@
-# processor.py
+# core/processor.py
 
 import os
 import csv
@@ -41,7 +41,6 @@ def choose_csv_files(folder: str, prefer_updates: bool):
     all_csv = list_csv_files(folder)
 
     if not prefer_updates:
-        # Just drop any _update files
         chosen = []
         for path in all_csv:
             name = os.path.basename(path)
@@ -63,7 +62,6 @@ def choose_csv_files(folder: str, prefer_updates: bool):
             base_root = root
             base_map.setdefault(base_root, path)  # only set if not already replaced
 
-    # Return files in a stable order
     chosen_paths = [base_map[k] for k in sorted(base_map.keys())]
     return chosen_paths
 
@@ -139,7 +137,7 @@ def process_csv_file(csv_path: str):
 
     header_index, hour_cols = _locate_header_and_hours(all_rows)
     if header_index == -1 or not hour_cols:
-        # Couldn't find a Hr01..Hr24 header row
+        # Couldn't find a Hr01–Hr24 header row
         return {}
 
     header_row = all_rows[header_index]
@@ -248,7 +246,8 @@ def format_results_as_text(yearly_results, folder_label: str):
     return "\n".join(lines)
 
 
-def process_single_subfolder(subfolder_path: str, dry_run: bool = True,
+def process_single_subfolder(subfolder_path: str,
+                             dry_run: bool = True,
                              prefer_updates: bool = True):
     """
     Process one monthly folder (e.g. SCPSAMonthly).
@@ -286,16 +285,18 @@ def process_single_subfolder(subfolder_path: str, dry_run: bool = True,
     return "\n".join(log_lines), yearly
 
 
-def process_all_subfolders(main_folder: str, dry_run: bool = True,
+def process_all_subfolders(main_folder: str,
+                           dry_run: bool = True,
                            prefer_updates: bool = True):
     """
     Process all immediate subfolders under main_folder.
 
-    Returns log_text covering everything.
+    Returns:
+        log_text (str), all_yearly (dict[subfolder_name] = yearly_results_dict)
     """
     subfolders = find_subfolders(main_folder)
     if not subfolders:
-        return f"No subfolders found inside: {main_folder}"
+        return f"No subfolders found inside: {main_folder}", {}
 
     all_logs = [
         f"Main folder: {main_folder}",
@@ -303,16 +304,21 @@ def process_all_subfolders(main_folder: str, dry_run: bool = True,
         f"Prefer updates: {prefer_updates}",
         "",
     ]
+
+    all_yearly = {}
+
     for sub in subfolders:
-        log_text, _ = process_single_subfolder(
+        folder_name = os.path.basename(sub.rstrip("/\\"))
+        log_text, yearly = process_single_subfolder(
             sub, dry_run=dry_run, prefer_updates=prefer_updates
         )
         all_logs.append(log_text)
         all_logs.append("-" * 60)
+        all_yearly[folder_name] = yearly
 
     if dry_run:
         all_logs.append("Dry run complete for ALL subfolders. No files written.")
     else:
         all_logs.append("Processing complete for ALL subfolders.")
 
-    return "\n".join(all_logs)
+    return "\n".join(all_logs), all_yearly
