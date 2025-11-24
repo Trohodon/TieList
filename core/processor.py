@@ -7,27 +7,6 @@ from collections import defaultdict
 SUPPORTED_TYPES = {"export", "import"}  # what we actually sum
 
 
-# ----------------- Encoding helper -----------------
-
-def _safe_open_csv(path):
-    """
-    Try several encodings so weird Windows characters (like 0x96) don't crash us.
-    """
-    encodings_to_try = ("utf-8-sig", "cp1252", "latin1")
-    last_error = None
-    for enc in encodings_to_try:
-        try:
-            return open(path, "r", newline="", encoding=enc)
-        except UnicodeDecodeError as e:
-            last_error = e
-            continue
-
-    # Last resort: replace bad bytes so we can at least read the numbers
-    return open(path, "r", newline="", encoding="utf-8", errors="replace")
-
-
-# ----------------- Folder helpers -----------------
-
 def find_subfolders(main_folder: str):
     """Return a list of full paths to immediate subfolders."""
     subfolders = []
@@ -48,8 +27,6 @@ def list_csv_files(folder: str):
     return sorted(files)
 
 
-# ----------------- Core CSV processing -----------------
-
 def _find_hour_indices(header_row):
     """
     Given a CSV header row, return list of column indices that are Hr01..Hr24.
@@ -65,6 +42,18 @@ def _find_hour_indices(header_row):
     return hour_indices
 
 
+def _locate_header_and_hours(rows):
+    """
+    Scan down through the rows until we find a row that contains Hr01..Hr24.
+    Returns (header_index, hour_cols). If not found, returns (-1, []).
+    """
+    for i, row in enumerate(rows):
+        hour_cols = _find_hour_indices(row)
+        if hour_cols:
+            return i, hour_cols
+    return -1, []
+
+
 def process_csv_file(csv_path: str):
     """
     Process a single monthly CSV.
@@ -75,66 +64,69 @@ def process_csv_file(csv_path: str):
     """
     results = defaultdict(lambda: defaultdict(float))
 
-    # >>> changed line: use safe open instead of fixed utf-8
-    with _safe_open_csv(csv_path) as f:
+    with open(csv_path, "r", newline="", encoding="utf-8-sig") as f:
         reader = csv.reader(f)
-        try:
-            header = next(reader)
-        except StopIteration:
-            return {}  # empty file
+        all_rows = list(reader)
 
-        hour_cols = _find_hour_indices(header)
-        if not hour_cols:
-            # No Hr01–Hr24 style columns found – nothing to do
-            return {}
+    if not all_rows:
+        return {}
 
-        # We assume:
-        # Col 0: Export / Import / Net
-        # Col 1: Date
-        # Col 2: Line name (may be blank except for first row of a block)
-        current_line_name = ""
+    header_index, hour_cols = _locate_header_and_hours(all_rows)
+    if header_index == -1 or not hour_cols:
+        # Couldn't find a Hr01..Hr24 header row
+        return {}
 
-        for row in reader:
-            if not row:
+    # Data starts on the row after the header
+    data_rows = all_rows[header_index + 1 :]
+
+    # We assume:
+    # Col 0: Export / Import / Net
+    # Col 1: Date
+    # Col 2: Line name (may be blank except for first row of a block)
+    current_line_name = ""
+
+    for row in data_rows:
+        if not row:
+            continue
+
+        # Make sure row is long enough for at least the first 3 columns
+        # (Python will just give "" if index is out of range via safe checks below.)
+        flow_type = str(row[0]).strip() if len(row) > 0 else ""
+        if not flow_type:
+            continue
+
+        flow_type_lower = flow_type.lower()
+        if flow_type_lower not in SUPPORTED_TYPES:
+            # Ignore Net or anything else for now
+            continue
+
+        # Column 2 is line name / corridor description
+        line_name_cell = ""
+        if len(row) > 2:
+            line_name_cell = str(row[2]).strip()
+
+        if line_name_cell:
+            current_line_name = line_name_cell
+
+        if not current_line_name:
+            # If we still don't have a name, skip – can't group it
+            continue
+
+        # Sum Hr01..Hr24
+        total_for_row = 0.0
+        for idx in hour_cols:
+            if idx >= len(row):
+                continue
+            cell = str(row[idx]).strip()
+            if cell == "":
+                continue
+            try:
+                total_for_row += float(cell)
+            except ValueError:
+                # Non-numeric; ignore
                 continue
 
-            flow_type = str(row[0]).strip()
-            if not flow_type:
-                continue
-
-            flow_type_lower = flow_type.lower()
-            if flow_type_lower not in SUPPORTED_TYPES:
-                # Ignore Net or anything else for now
-                continue
-
-            # Column 2 is line name / corridor description
-            # If it's blank, keep using the last non-blank name.
-            line_name_cell = ""
-            if len(row) > 2:
-                line_name_cell = str(row[2]).strip()
-
-            if line_name_cell:
-                current_line_name = line_name_cell
-
-            if not current_line_name:
-                # If we still don't have a name, skip – can't group it
-                continue
-
-            # Sum Hr01..Hr24
-            total_for_row = 0.0
-            for idx in hour_cols:
-                if idx >= len(row):
-                    continue
-                cell = str(row[idx]).strip()
-                if cell == "":
-                    continue
-                try:
-                    total_for_row += float(cell)
-                except ValueError:
-                    # Non-numeric; just ignore
-                    continue
-
-            results[current_line_name][flow_type.capitalize()] += total_for_row
+        results[current_line_name][flow_type.capitalize()] += total_for_row
 
     return results
 
@@ -195,6 +187,11 @@ def process_single_subfolder(subfolder_path: str, dry_run: bool = True):
     monthly_results = []
     for csv_path in csv_files:
         res = process_csv_file(csv_path)
+        if not res:
+            log_lines.append(
+                f"   ! No Hr01–Hr24 header or no Export/Import rows found in: "
+                f"{os.path.basename(csv_path)}"
+            )
         monthly_results.append(res)
 
     yearly = merge_results(monthly_results)
