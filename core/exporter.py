@@ -4,16 +4,25 @@ import os
 import csv
 
 
-def get_output_root(main_folder: str, override: str | None) -> str:
+def get_output_root(main_folder: str, override) -> str:
     """
     Decide where to put summary CSVs.
 
     If override is a non-empty string, use that as the root.
     Otherwise, create/use a 'Results' folder inside main_folder.
     """
-    if override:
-        root = override.strip()
+
+    # --- SAFETY FIX: normalize override ----
+    if override is None:
+        override = ""
     else:
+        override = str(override).strip()
+
+    # If user picked an override folder
+    if override != "":
+        root = override
+    else:
+        # default folder inside main folder
         root = os.path.join(main_folder, "Results")
 
     os.makedirs(root, exist_ok=True)
