@@ -27,6 +27,47 @@ def list_csv_files(folder: str):
     return sorted(files)
 
 
+def choose_csv_files(folder: str, prefer_updates: bool):
+    """
+    Decide which CSV files to use in a folder.
+
+    If prefer_updates is True:
+        - Use 'base_update.csv' instead of 'base.csv' when both exist.
+        - Otherwise just use whatever exists.
+
+    If prefer_updates is False:
+        - Ignore any '*_update.csv' files and use only the base files.
+    """
+    all_csv = list_csv_files(folder)
+
+    if not prefer_updates:
+        # Just drop any _update files
+        chosen = []
+        for path in all_csv:
+            name = os.path.basename(path)
+            root, ext = os.path.splitext(name)
+            if root.lower().endswith("_update"):
+                continue
+            chosen.append(path)
+        return chosen
+
+    # prefer_updates == True
+    base_map = {}  # base_root -> chosen file path
+    for path in all_csv:
+        name = os.path.basename(path)
+        root, ext = os.path.splitext(name)
+        if root.lower().endswith("_update"):
+            base_root = root[:-7]  # strip "_update"
+            base_map[base_root] = path  # overwrite base
+        else:
+            base_root = root
+            base_map.setdefault(base_root, path)  # only set if not already replaced
+
+    # Return files in a stable order
+    chosen_paths = [base_map[k] for k in sorted(base_map.keys())]
+    return chosen_paths
+
+
 def _find_hour_indices(header_row):
     """
     Given a CSV header row, return list of column indices that are Hr01..Hr24.
@@ -81,13 +122,11 @@ def process_csv_file(csv_path: str):
         results: dict[line_name][flow_type] = total_sum_for_this_file
         where flow_type is 'Export' or 'Import'.
 
-    This version is flexible:
-      * Header with Hr01..Hr24 can be anywhere (we scan for it).
-      * 'Export' / 'Import' can be in ANY column (A or B, etc).
-        We detect the first column that contains those values.
-      * Line name column is preferably taken from the header
-        ('Name', 'Line', 'Tie'); if that can't be found we fall
-        back to "flow column + 2" like in the original layout.
+    Flexible enough for:
+      * Header with Hr01..Hr24 anywhere.
+      * 'Export' / 'Import' in ANY column.
+      * Line name from header column ('Name', 'Line', 'Tie') when present,
+        otherwise "flow column + 2".
     """
     results = defaultdict(lambda: defaultdict(float))
 
@@ -209,18 +248,20 @@ def format_results_as_text(yearly_results, folder_label: str):
     return "\n".join(lines)
 
 
-def process_single_subfolder(subfolder_path: str, dry_run: bool = True):
+def process_single_subfolder(subfolder_path: str, dry_run: bool = True,
+                             prefer_updates: bool = True):
     """
     Process one monthly folder (e.g. SCPSAMonthly).
 
     Returns a tuple (log_text, yearly_results_dict).
     """
     folder_name = os.path.basename(subfolder_path.rstrip("/\\"))
-    csv_files = list_csv_files(subfolder_path)
+    csv_files = choose_csv_files(subfolder_path, prefer_updates=prefer_updates)
 
     log_lines = [
         f"Processing subfolder: {folder_name}",
-        f"Found {len(csv_files)} .csv files:",
+        f"Prefer updates: {prefer_updates}",
+        f"Using {len(csv_files)} .csv files:",
     ]
     for p in csv_files:
         log_lines.append(f"   - {os.path.basename(p)}")
@@ -245,7 +286,8 @@ def process_single_subfolder(subfolder_path: str, dry_run: bool = True):
     return "\n".join(log_lines), yearly
 
 
-def process_all_subfolders(main_folder: str, dry_run: bool = True):
+def process_all_subfolders(main_folder: str, dry_run: bool = True,
+                           prefer_updates: bool = True):
     """
     Process all immediate subfolders under main_folder.
 
@@ -255,9 +297,16 @@ def process_all_subfolders(main_folder: str, dry_run: bool = True):
     if not subfolders:
         return f"No subfolders found inside: {main_folder}"
 
-    all_logs = [f"Main folder: {main_folder}", f"Found {len(subfolders)} subfolders.", ""]
+    all_logs = [
+        f"Main folder: {main_folder}",
+        f"Found {len(subfolders)} subfolders.",
+        f"Prefer updates: {prefer_updates}",
+        "",
+    ]
     for sub in subfolders:
-        log_text, _ = process_single_subfolder(sub, dry_run=dry_run)
+        log_text, _ = process_single_subfolder(
+            sub, dry_run=dry_run, prefer_updates=prefer_updates
+        )
         all_logs.append(log_text)
         all_logs.append("-" * 60)
 
