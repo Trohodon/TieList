@@ -4,19 +4,21 @@ import os
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from core import processor
+from core import processor, exporter  # core package must contain __init__.py
 
 
 class TieDataApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Tie List Processor v1.5")
-        self.geometry("1100x650")
+        self.title("Tie List Processor v2.0")
+        self.geometry("1150x680")
 
         self.main_folder_var = tk.StringVar()
+        self.output_folder_var = tk.StringVar()
         self.dry_run_var = tk.BooleanVar(value=True)
         self.prefer_updates_var = tk.BooleanVar(value=True)
         self.mode_var = tk.StringVar(value="single")  # 'single' or 'all'
+        self.status_var = tk.StringVar(value="Idle")
 
         self._build_gui()
 
@@ -26,7 +28,7 @@ class TieDataApp(tk.Tk):
         style = ttk.Style(self)
         style.configure("Run.TButton", font=("TkDefaultFont", 11, "bold"), padding=8)
 
-        # Top: folder selection
+        # Top: main folder selection
         top_frame = ttk.Frame(self)
         top_frame.pack(fill="x", padx=10, pady=(10, 5))
 
@@ -34,18 +36,36 @@ class TieDataApp(tk.Tk):
             row=0, column=0, columnspan=3, sticky="w"
         )
 
-        entry = ttk.Entry(top_frame, textvariable=self.main_folder_var, width=80)
-        entry.grid(row=1, column=0, padx=(0, 5), sticky="we")
+        main_entry = ttk.Entry(top_frame, textvariable=self.main_folder_var, width=80)
+        main_entry.grid(row=1, column=0, padx=(0, 5), sticky="we")
 
-        browse_btn = ttk.Button(top_frame, text="Browse...", command=self.browse_folder)
-        browse_btn.grid(row=1, column=1, sticky="e")
-
-        refresh_btn = ttk.Button(
-            top_frame, text="Refresh tree", command=self.refresh_tree
+        ttk.Button(top_frame, text="Browse...", command=self.browse_main_folder).grid(
+            row=1, column=1, sticky="e"
         )
-        refresh_btn.grid(row=1, column=2, padx=(5, 0), sticky="e")
+        ttk.Button(top_frame, text="Refresh tree", command=self.refresh_tree).grid(
+            row=1, column=2, padx=(5, 0), sticky="e"
+        )
 
         top_frame.columnconfigure(0, weight=1)
+
+        # Output folder selection
+        out_frame = ttk.Frame(self)
+        out_frame.pack(fill="x", padx=10, pady=(0, 5))
+
+        ttk.Label(
+            out_frame,
+            text="Output folder for CSV summaries "
+                 "(blank = create 'Results' inside main folder):",
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+
+        out_entry = ttk.Entry(out_frame, textvariable=self.output_folder_var, width=80)
+        out_entry.grid(row=1, column=0, padx=(0, 5), sticky="we")
+
+        ttk.Button(
+            out_frame, text="Browse...", command=self.browse_output_folder
+        ).grid(row=1, column=1, sticky="e")
+
+        out_frame.columnconfigure(0, weight=1)
 
         # Options (dry run, prefer updates, mode)
         opt_frame = ttk.Frame(self)
@@ -86,11 +106,12 @@ class TieDataApp(tk.Tk):
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill="x", padx=10, pady=(0, 5))
 
-        run_btn = ttk.Button(
-            btn_frame, text="Run Processing", style="Run.TButton",
-            command=self.run_processing
-        )
-        run_btn.pack(side="left")
+        ttk.Button(
+            btn_frame,
+            text="Run Processing",
+            style="Run.TButton",
+            command=self.run_processing,
+        ).pack(side="left")
 
         ttk.Button(btn_frame, text="Save Log...", command=self.save_log).pack(
             side="right"
@@ -101,16 +122,18 @@ class TieDataApp(tk.Tk):
 
         # Middle area: folder tree (left) + log (right)
         middle = ttk.Frame(self)
-        middle.pack(fill="both", expand=True, padx=10, pady=(5, 10))
+        middle.pack(fill="both", expand=True, padx=10, pady=(5, 5))
 
         # Folder tree
         tree_frame = ttk.Frame(middle)
-        tree_frame.pack(side="left", fill="y", padx=(0, 5), pady=0)
+        tree_frame.pack(side="left", fill="y", padx=(0, 5))
 
-        ttk.Label(tree_frame, text="Folder contents").pack(anchor="w")
+        ttk.Label(tree_frame, text="Folder contents (files actually used)").pack(
+            anchor="w"
+        )
 
-        self.folder_tree = ttk.Treeview(tree_frame, show="tree", height=25)
-        self.folder_tree.pack(side="left", fill="y", expand=False)
+        self.folder_tree = ttk.Treeview(tree_frame, show="tree", height=26)
+        self.folder_tree.pack(side="left", fill="y")
 
         tree_scroll = ttk.Scrollbar(
             tree_frame, orient="vertical", command=self.folder_tree.yview
@@ -136,7 +159,7 @@ class TieDataApp(tk.Tk):
         x_scroll = ttk.Scrollbar(
             self, orient="horizontal", command=self.log_text.xview
         )
-        x_scroll.pack(fill="x", padx=10, pady=(0, 10))
+        x_scroll.pack(fill="x", padx=10, pady=(0, 5))
         self.log_text.configure(xscrollcommand=x_scroll.set)
 
         # Color tags for log
@@ -147,13 +170,31 @@ class TieDataApp(tk.Tk):
         self.log_text.tag_config("line", foreground="darkgreen")
         self.log_text.tag_config("status", foreground="purple")
 
+        # Status bar + progress
+        status_frame = ttk.Frame(self)
+        status_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+        self.progress = ttk.Progressbar(
+            status_frame, mode="determinate", maximum=100, length=200
+        )
+        self.progress.pack(side="left")
+
+        ttk.Label(status_frame, textvariable=self.status_var).pack(
+            side="left", padx=(10, 0)
+        )
+
     # ---------- Helper methods ----------
 
-    def browse_folder(self):
+    def browse_main_folder(self):
         folder = filedialog.askdirectory(title="Select DataForTieList folder")
         if folder:
             self.main_folder_var.set(folder)
             self.refresh_tree()
+
+    def browse_output_folder(self):
+        folder = filedialog.askdirectory(title="Select output folder for summaries")
+        if folder:
+            self.output_folder_var.set(folder)
 
     def _get_main_folder_if_exists(self):
         folder = self.main_folder_var.get().strip()
@@ -234,6 +275,8 @@ class TieDataApp(tk.Tk):
                     sub_id, "end", text=os.path.basename(p), open=False
                 )
 
+        self.folder_tree.item(root_id, open=True)
+
     def on_options_changed(self):
         # Only thing that really needs a visual refresh is the tree
         self.refresh_tree()
@@ -249,10 +292,24 @@ class TieDataApp(tk.Tk):
         prefer_updates = self.prefer_updates_var.get()
         mode = self.mode_var.get()
 
-        if mode == "single":
-            self.run_single_folder(main_folder, dry, prefer_updates)
-        else:
-            self.run_all_folders(main_folder, dry, prefer_updates)
+        self.status_var.set("Running...")
+        self.progress["value"] = 0
+        self.update_idletasks()
+
+        try:
+            if mode == "single":
+                self.run_single_folder(main_folder, dry, prefer_updates)
+            else:
+                self.run_all_folders(main_folder, dry, prefer_updates)
+
+            self.progress["value"] = 100
+            if dry:
+                self.status_var.set("Done (dry run, no files written)")
+            else:
+                self.status_var.set("Done (processing + CSV summaries)")
+        except Exception as e:
+            self.status_var.set("Error during run")
+            messagebox.showerror("Error", f"An error occurred:\n{e}")
 
     def run_single_folder(self, main_folder: str, dry: bool, prefer_updates: bool):
         # Let the user pick ONE subfolder
@@ -269,6 +326,8 @@ class TieDataApp(tk.Tk):
         if not test_folder:
             return
 
+        folder_name = os.path.basename(test_folder.rstrip("/\\"))
+
         self.append_log(
             f"=== TEST RUN on single subfolder ===\n"
             f"Dry run = {dry}\n"
@@ -276,11 +335,20 @@ class TieDataApp(tk.Tk):
             f"Folder = {test_folder}\n"
         )
 
-        log_text, _ = processor.process_single_subfolder(
+        log_text, yearly = processor.process_single_subfolder(
             test_folder, dry_run=dry, prefer_updates=prefer_updates
         )
         self.append_log(log_text)
-        self.append_log("\n")
+
+        # CSV export
+        if not dry:
+            output_root = exporter.get_output_root(
+                main_folder, self.output_folder_var.get()
+            )
+            path = exporter.write_subfolder_summary(output_root, folder_name, yearly)
+            self.append_log(f"Summary CSV written to: {path}\n")
+        else:
+            self.append_log("Dry run: CSV summary not written.\n")
 
     def run_all_folders(self, main_folder: str, dry: bool, prefer_updates: bool):
         self.append_log(
@@ -290,11 +358,19 @@ class TieDataApp(tk.Tk):
             f"Main folder = {main_folder}\n"
         )
 
-        log_text = processor.process_all_subfolders(
+        log_text, all_yearly = processor.process_all_subfolders(
             main_folder, dry_run=dry, prefer_updates=prefer_updates
         )
         self.append_log(log_text)
-        self.append_log("\n")
+
+        if not dry:
+            output_root = exporter.get_output_root(
+                main_folder, self.output_folder_var.get()
+            )
+            paths = exporter.write_all_summaries(output_root, all_yearly)
+            self.append_log("Summary CSVs written:\n" + "\n".join(paths) + "\n")
+        else:
+            self.append_log("Dry run: no CSV summaries were written.\n")
 
 
 if __name__ == "__main__":
