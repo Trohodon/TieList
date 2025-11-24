@@ -4,7 +4,7 @@ import os
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-import processor  # make sure processor.py is in the same folder as this file
+from core import processor
 
 
 class TieDataApp(tk.Tk):
