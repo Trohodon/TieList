@@ -344,3 +344,100 @@ class TieDataApp(tk.Tk):
         if not subfolders:
             messagebox.showerror(
                 "No subfolders", "No secondary folders were found under the main one."
+            )
+            return
+
+        test_folder = filedialog.askdirectory(
+            title="Select ONE secondary folder to test", initialdir=main_folder
+        )
+        if not test_folder:
+            return
+
+        self.append_log(
+            f"=== TEST RUN on single subfolder ===\n"
+            f"Dry run = {dry}\n"
+            f"Prefer updates = {prefer_updates}\n"
+            f"Folder = {test_folder}\n"
+        )
+
+        self.progress["mode"] = "indeterminate"
+        self.progress.start(10)
+        self.status_var.set("Processing single subfolder...")
+        self.update_idletasks()
+
+        log_text, _, out_path = processor.process_single_subfolder(
+            test_folder,
+            dry_run=dry,
+            prefer_updates=prefer_updates,
+            output_folder=output_folder,
+        )
+
+        self.progress.stop()
+        self.clear_progress()
+
+        self.append_log(log_text)
+        if out_path:
+            self.append_log(f"(Output written to: {out_path})")
+        self.append_log("\n")
+
+    def run_all_folders(
+        self, main_folder: str, dry: bool, prefer_updates: bool, output_folder: str | None
+    ):
+        subfolders = processor.find_subfolders(main_folder)
+        if not subfolders:
+            messagebox.showerror(
+                "No subfolders", "No secondary folders were found under the main one."
+            )
+            return
+
+        self.append_log(
+            f"=== RUN ALL SUBFOLDERS ===\n"
+            f"Dry run = {dry}\n"
+            f"Prefer updates = {prefer_updates}\n"
+            f"Main folder = {main_folder}\n"
+        )
+
+        self.progress["mode"] = "determinate"
+        self.progress["maximum"] = len(subfolders)
+        self.progress["value"] = 0
+
+        outputs: list[str] = []
+
+        for idx, sub in enumerate(subfolders, start=1):
+            short = os.path.basename(sub.rstrip("/\\"))
+            self.status_var.set(f"Processing {short} ({idx}/{len(subfolders)})...")
+            self.update_idletasks()
+
+            log_text, _, out_path = processor.process_single_subfolder(
+                sub,
+                dry_run=dry,
+                prefer_updates=prefer_updates,
+                output_folder=output_folder,
+            )
+            self.append_log(log_text)
+            self.append_log("-" * 60)
+
+            if out_path:
+                outputs.append(out_path)
+
+            self.progress["value"] = idx
+            self.progress.update_idletasks()
+
+        if outputs:
+            self.append_log("CSV result files created:")
+            for p in outputs:
+                self.append_log(f"  - {p}")
+        else:
+            if not dry:
+                self.append_log(
+                    "No CSV result files were written (either no data or output folder missing)."
+                )
+
+        self.append_log("\n=== All subfolders processed ===\n")
+
+    # ---------- main ----------
+
+
+if __name__ == "__main__":
+    app = TieDataApp()
+    app.mainloop()
